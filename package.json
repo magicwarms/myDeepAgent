@@ -14,8 +14,9 @@
   "dependencies": {
     "@langchain/core": "^1.1.48",
     "@langchain/openai": "^1.4.7",
-    "dotenv": "^16.6.1",
+    "@langchain/tavily": "^1.2.0",
     "deepagents": "^1.10.2",
+    "dotenv": "^16.6.1",
     "ink": "^5.1.0",
     "ink-spinner": "^5.0.0",
     "ink-text-input": "^6.0.0",

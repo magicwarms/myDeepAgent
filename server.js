@@ -12,6 +12,7 @@ import {
 } from "deepagents";
 import { tool } from "langchain";
 import * as z from "zod";
+import webResearchSubagent from "./tools/subagents/webSearch";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -121,6 +122,7 @@ If a new fact contradicts an old one, append a new entry noting the change; leav
 # Scope
 
 /memories/ is for memory only. /workspace/ is for project files. Never store secrets, API keys, or tokens.
+IMPORTANT: For question and research tasks, delegate to your subagents using the task() tool. This keeps your context clean and improves results.
 `;
 
 const ensureMemoryDir = () => {
@@ -179,6 +181,7 @@ export const createAgent = () => {
         virtualMode: true,
       }),
     }),
+    subagents: [webResearchSubagent],
   });
 };
 
