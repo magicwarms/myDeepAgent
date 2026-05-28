@@ -1,0 +1,27 @@
+{
+  "name": "my-deep-agent",
+  "version": "1.0.0",
+  "description": "My Smart Agent",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "tsx tui.jsx",
+    "dev": "tsx tui.jsx",
+    "start:headless": "node server.js"
+  },
+  "author": "Andhana Utama",
+  "license": "MIT",
+  "dependencies": {
+    "@langchain/core": "^1.1.48",
+    "@langchain/openai": "^1.4.7",
+    "dotenv": "^16.6.1",
+    "deepagents": "^1.10.2",
+    "ink": "^5.1.0",
+    "ink-spinner": "^5.0.0",
+    "ink-text-input": "^6.0.0",
+    "langchain": "^1.4.2",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tsx": "^4.20.2"
+  }
+}
