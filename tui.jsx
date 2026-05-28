@@ -22,6 +22,7 @@ const FONT_NAME = "Plus Jakarta Sans";
 const DEFAULT_MODEL = process.env.SUMOPOD_MODEL ?? "kimi-k2.6";
 const MAX_HISTORY = 200;
 const MAX_TOOL_TRACE = 50;
+const MAX_APP_LOG = 200;
 const IS_WATCH_MODE = process.env.TUI_WATCH === "1";
 
 if (process.stdin?.on) {
@@ -183,6 +184,33 @@ const formatDuration = (ms) => {
   return `${(ms / 1000).toFixed(1)}s`;
 };
 
+const LOG_LEVEL_COLOR = {
+  info: "textSoft",
+  api: "accentSoft",
+  warn: "warn",
+  error: "error",
+  stderr: "warn",
+};
+
+const buildLogLines = (entries, width) => {
+  const lines = [];
+  const ordered = [...entries].reverse();
+  ordered.forEach((entry) => {
+    const colorKey = LOG_LEVEL_COLOR[entry.level] ?? "textMuted";
+    const color = COLORS[colorKey] ?? COLORS.textMuted;
+    const ts = new Date(entry.ts).toISOString().slice(11, 19);
+    const tag = String(entry.level || "log").toUpperCase().padEnd(5);
+    const message = `${ts} [${tag}] ${normalizeWhitespace(entry.text)}`;
+    wrapText(message, width).forEach((line) => {
+      lines.push({ text: line, color });
+    });
+  });
+  if (lines.length === 0) {
+    lines.push({ text: "No log entries yet.", color: COLORS.textMuted });
+  }
+  return lines;
+};
+
 const CTRL_C = "";
 const CTRL_D = "";
 const CTRL_K = "";
@@ -200,6 +228,7 @@ const App = () => {
   const [chatHistory, setChatHistory] = useState([]);
   const [pending, setPending] = useState(null);
   const [toolTrace, setToolTrace] = useState([]);
+  const [appLog, setAppLog] = useState([]);
   const [running, setRunning] = useState(false);
   const [runStart, setRunStart] = useState(null);
   const [lastDuration, setLastDuration] = useState(null);
@@ -217,13 +246,68 @@ const App = () => {
     return `${Date.now()}-${idRef.current}`;
   };
 
+  const pushLog = useCallback((level, text) => {
+    setAppLog((prev) => {
+      const entry = {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        level: String(level || "info"),
+        text: String(text ?? ""),
+        ts: Date.now(),
+      };
+      return [...prev, entry].slice(-MAX_APP_LOG);
+    });
+  }, []);
+
+  useEffect(() => {
+    const fmt = (args) =>
+      args
+        .map((a) => (typeof a === "string" ? a : safeStringify(a)))
+        .join(" ");
+
+    const origLog = console.log;
+    const origInfo = console.info;
+    const origWarn = console.warn;
+    const origError = console.error;
+    const origDebug = console.debug;
+    const origStderrWrite = process.stderr.write.bind(process.stderr);
+
+    console.log = (...a) => pushLog("info", fmt(a));
+    console.info = (...a) => pushLog("info", fmt(a));
+    console.warn = (...a) => pushLog("warn", fmt(a));
+    console.error = (...a) => pushLog("error", fmt(a));
+    console.debug = (...a) => pushLog("info", fmt(a));
+    process.stderr.write = (chunk, ...rest) => {
+      try {
+        pushLog("stderr", typeof chunk === "string" ? chunk : chunk.toString());
+      } catch {
+        // ignore
+      }
+      const cb = rest.find((r) => typeof r === "function");
+      if (cb) cb();
+      return true;
+    };
+
+    return () => {
+      console.log = origLog;
+      console.info = origInfo;
+      console.warn = origWarn;
+      console.error = origError;
+      console.debug = origDebug;
+      process.stderr.write = origStderrWrite;
+    };
+  }, [pushLog]);
+
   useEffect(() => {
     try {
-      setAgentState({ agent: createAgent(), error: "" });
+      const agent = createAgent();
+      setAgentState({ agent, error: "" });
+      pushLog("api", "agent initialized");
     } catch (err) {
-      setAgentState({ agent: null, error: err?.message ?? "Failed to initialize agent." });
+      const msg = err?.message ?? "Failed to initialize agent.";
+      setAgentState({ agent: null, error: msg });
+      pushLog("error", `agent init failed: ${msg}`);
     }
-  }, []);
+  }, [pushLog]);
 
   useEffect(() => {
     if (!running) return undefined;
@@ -239,11 +323,14 @@ const App = () => {
   const leftWidth = isNarrow ? columns : Math.max(40, columns - rightWidth - 1);
   const chatHeight = isNarrow ? Math.max(6, Math.floor(bodyHeight * 0.6)) : bodyHeight;
   const rightHeight = isNarrow ? Math.max(6, bodyHeight - chatHeight) : bodyHeight;
-  const statusHeight = Math.min(8, Math.max(6, Math.floor(rightHeight * 0.35)));
-  const toolHeight = Math.max(4, rightHeight - statusHeight);
+  const statusHeight = Math.min(8, Math.max(6, Math.floor(rightHeight * 0.28)));
+  const remainingRight = Math.max(8, rightHeight - statusHeight - 2);
+  const toolHeight = Math.max(4, Math.floor(remainingRight / 2));
+  const logHeight = Math.max(4, remainingRight - toolHeight);
 
   const chatInnerWidth = Math.max(10, leftWidth - 2);
   const toolInnerWidth = Math.max(10, rightWidth - 2);
+  const logInnerWidth = Math.max(10, rightWidth - 2);
 
   const chatInnerHeight = Math.max(1, chatHeight - 2);
   const chatContentHeight = Math.max(1, chatInnerHeight - 1);
@@ -256,6 +343,11 @@ const App = () => {
   const toolLines = useMemo(
     () => buildToolLines(toolTrace, toolInnerWidth - 2),
     [toolTrace, toolInnerWidth]
+  );
+
+  const logLines = useMemo(
+    () => buildLogLines(appLog, logInnerWidth - 2),
+    [appLog, logInnerWidth]
   );
 
   const maxScrollOffset = Math.max(0, chatLines.length - chatContentHeight);
@@ -384,6 +476,7 @@ const App = () => {
     if (!trimmed || running) return;
     if (!agentState.agent) {
       setError(agentState.error || "Agent is not available.");
+      pushLog("error", "submit blocked: agent not available");
       return;
     }
 
@@ -402,6 +495,13 @@ const App = () => {
 
     let messageTask = Promise.resolve();
     let toolTask = Promise.resolve();
+    let assistantMsgCount = 0;
+    let toolCallCount = 0;
+
+    pushLog(
+      "api",
+      `stream_start model=${DEFAULT_MODEL} msgs=${updatedHistory.length}`
+    );
 
     try {
       const run = await agentState.agent.streamEvents(
@@ -425,6 +525,11 @@ const App = () => {
           }
 
           const finalText = buffer || "";
+          assistantMsgCount += 1;
+          pushLog(
+            "api",
+            `assistant_message #${assistantMsgCount} len=${finalText.length}`
+          );
           setChatHistory((prev) =>
             [...prev, { id: messageId, role: "assistant", content: finalText }].slice(-MAX_HISTORY)
           );
@@ -433,12 +538,16 @@ const App = () => {
             setScrollOffset(0);
           }
         }
-      })().catch(() => {});
+      })().catch((err) => {
+        pushLog("error", `message stream error: ${err?.message ?? err}`);
+      });
 
       toolTask = (async () => {
         for await (const call of run.toolCalls) {
           const toolId = nextId();
           const name = call.name ?? "tool";
+          toolCallCount += 1;
+          pushLog("api", `tool_call #${toolCallCount} name=${name}`);
           let inputText = "";
 
           try {
@@ -471,6 +580,7 @@ const App = () => {
             );
           } catch (err) {
             const outputText = err?.message ?? "Tool failed.";
+            pushLog("error", `tool_error name=${name} err=${outputText}`);
             setToolTrace((prev) =>
               prev.map((entry) =>
                 entry.id === toolId
@@ -480,22 +590,33 @@ const App = () => {
             );
           }
         }
-      })().catch(() => {});
+      })().catch((err) => {
+        pushLog("error", `tool stream error: ${err?.message ?? err}`);
+      });
 
       try {
         await run.output;
       } catch (err) {
-        setError(err?.message ?? "Agent run failed.");
+        const msg = err?.message ?? "Agent run failed.";
+        setError(msg);
+        pushLog("error", `run.output error: ${msg}`);
       }
     } catch (err) {
-      setError(err?.message ?? "Agent run failed.");
+      const msg = err?.message ?? "Agent run failed.";
+      setError(msg);
+      pushLog("error", `streamEvents error: ${msg}`);
     } finally {
       await Promise.allSettled([messageTask, toolTask]);
+      const duration = Date.now() - startedAt;
+      pushLog(
+        "api",
+        `stream_end duration=${duration}ms messages=${assistantMsgCount} tools=${toolCallCount}`
+      );
       setRunning(false);
       abortRef.current = null;
-      setLastDuration(Date.now() - startedAt);
+      setLastDuration(duration);
     }
-  }, [agentState, chatHistory, input, running, safeScrollOffset]);
+  }, [agentState, chatHistory, input, running, safeScrollOffset, pushLog]);
 
   const elapsed = running && runStart ? Date.now() - runStart : lastDuration;
 
@@ -505,6 +626,7 @@ const App = () => {
   );
 
   const visibleToolLines = toolLines.slice(0, Math.max(1, toolHeight - 3));
+  const visibleLogLines = logLines.slice(0, Math.max(1, logHeight - 3));
 
   const renderLines = (lines) =>
     lines.map((line, index) => (
@@ -588,6 +710,20 @@ const App = () => {
             <Text color={COLORS.textMuted}>Tool Trace</Text>
             <Box flexDirection="column">
               {renderLines(visibleToolLines)}
+            </Box>
+          </Box>
+
+          <Box
+            height={logHeight}
+            borderStyle="classic"
+            borderColor={COLORS.hairline}
+            paddingX={2}
+            flexDirection="column"
+            marginTop={1}
+          >
+            <Text color={COLORS.textMuted}>App Log</Text>
+            <Box flexDirection="column">
+              {renderLines(visibleLogLines)}
             </Box>
           </Box>
         </Box>
