@@ -7,6 +7,7 @@
   "scripts": {
     "start": "tsx tui.jsx",
     "dev": "tsx tui.jsx",
+    "web": "node web-server.js",
     "start:headless": "node server.js"
   },
   "author": "Andhana Utama",

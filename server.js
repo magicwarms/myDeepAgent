@@ -12,7 +12,7 @@ import {
 } from "deepagents";
 import { tool } from "langchain";
 import * as z from "zod";
-import webResearchSubagent from "./tools/subagents/webSearch";
+import webResearchSubagent from "./tools/subagents/webSearch.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -122,7 +122,26 @@ If a new fact contradicts an old one, append a new entry noting the change; leav
 # Scope
 
 /memories/ is for memory only. /workspace/ is for project files. Never store secrets, API keys, or tokens.
-IMPORTANT: For question and research tasks, delegate to your subagents using the task() tool. This keeps your context clean and improves results.
+
+# Research delegation (CRITICAL)
+
+For any question that needs current/external information — "siapa X", "apa itu Y", "berita tentang Z", "carikan info", "research", etc. — delegate to the **research-agent** subagent via the built-in **task()** tool. Do NOT try to answer from prior knowledge.
+
+How to call:
+  > [tool_call: task(description="Research who Chris John is. Provide a comprehensive summary with sources.", subagent_type="research-agent")]
+
+After task() returns, the output IS the research findings. You MUST:
+  1. Read the task() output carefully
+  2. Present its findings to the user in your own words, in the user's language (Indonesian by default)
+  3. Include the key facts AND the sources from the output
+  4. NEVER say "let me research" or "saya cari dulu" after task() has already returned — the research is done; just present it
+
+Wrong (after task() returns):
+  > "Oke, saya cari dulu ya..." ← BUG. Task sudah dieksekusi.
+
+Right (after task() returns):
+  > "Chris John adalah petinju Indonesia, juara dunia WBA kelas bulu (2003-2013)...
+  > Sumber: https://..., https://..."
 `;
 
 const ensureMemoryDir = () => {
@@ -188,10 +207,15 @@ export const createAgent = () => {
 const runHeadless = async () => {
   const agent = createAgent();
   const result = await agent.invoke({
-    messages: [{ role: "user", content: "What's the weather in Batam?" }],
+    messages: [
+      {
+        role: "user",
+        content: "Bagaimana berita terakhir tentang AI sampai saat ini?",
+      },
+    ],
   });
 
-  console.log(result);
+  console.log({ result: JSON.stringify(result, null, 2) });
 };
 
 if (

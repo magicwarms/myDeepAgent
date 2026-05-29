@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Deep Agent — Dashboard</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2300d4a4'/%3E%3Ctext x='16' y='22' text-anchor='middle' font-family='monospace' font-size='18' font-weight='700' fill='%230a0a0a'%3ED%3C/text%3E%3C/svg%3E"
+    />
+  </head>
+  <body>
+    <div id="app">
+      <!-- Top nav -->
+      <header class="topnav">
+        <div class="brand">
+          <div class="brand-mark">D</div>
+          <span>Deep&nbsp;Agent</span>
+        </div>
+        <nav>
+          <a href="#" class="active">Dashboard</a>
+          <a
+            href="https://github.com/anthropics/claude-code"
+            target="_blank"
+            rel="noopener"
+            >Docs</a
+          >
+        </nav>
+        <div class="spacer"></div>
+        <div class="health-pill">
+          <span
+            class="health-dot"
+            :class="{ err: !health.ok, run: running }"
+          ></span>
+          <span>{{ health.ok ? (running ? 'Streaming' : 'Online') : 'Offline' }}</span>
+        </div>
+      </header>
+
+      <!-- Hero -->
+      <section class="hero">
+        <div class="hero-inner">
+          <div>
+            <h1>Conversations with your agent.</h1>
+            <p class="lead">
+              A clean control surface for your local Deep Agent — chat, watch
+              tool calls execute, and stream logs in real time.
+            </p>
+          </div>
+          <div class="hero-stats">
+            <div class="stat-chip">
+              <span class="label">Model</span>
+              <span class="value">{{ health.model || '—' }}</span>
+            </div>
+            <div class="stat-chip">
+              <span class="label">Messages</span>
+              <span class="value">{{ chatHistory.length }}</span>
+            </div>
+            <div class="stat-chip">
+              <span class="label">Tools</span>
+              <span class="value">{{ toolTrace.length }}</span>
+            </div>
+            <div class="stat-chip">
+              <span class="label">Elapsed</span>
+              <span class="value">{{ formatDuration(elapsed) }}</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Main grid -->
+      <main class="main">
+        <!-- Conversation card -->
+        <section class="card conv-card">
+          <div v-if="running" class="loader-bar" aria-hidden="true"></div>
+
+          <div class="card-head">
+            <h2>Conversation</h2>
+            <div class="head-meta" v-if="lastDuration != null && !running">
+              last run · {{ formatDuration(lastDuration) }}
+            </div>
+            <div class="head-meta" v-else-if="running">
+              <span class="spin"></span>&nbsp;streaming
+            </div>
+          </div>
+
+          <div class="conv-scroll" ref="scrollEl">
+            <div v-if="chatHistory.length === 0 && !pending" class="conv-empty">
+              <div class="glyph" aria-hidden="true">
+                <svg
+                  width="24"
+                  height="24"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                </svg>
+              </div>
+              <h3>Start a session</h3>
+              <p>Ask the agent a question to begin. Tool calls and logs stream live below.</p>
+              <div class="suggestions">
+                <button
+                  v-for="s in suggestions"
+                  :key="s"
+                  class="suggestion"
+                  @click="applySuggestion(s)"
+                >
+                  {{ s }}
+                </button>
+              </div>
+            </div>
+
+            <div
+              v-for="m in chatHistory"
+              :key="m.id"
+              class="msg"
+              :class="m.role"
+            >
+              <div class="avatar">{{ m.role === 'user' ? 'U' : 'A' }}</div>
+              <div class="bubble">
+                <div class="role">{{ m.role === 'user' ? 'You' : 'Agent' }}</div>
+                <div class="body">{{ m.content }}</div>
+              </div>
+            </div>
+
+            <div v-if="pending" class="msg assistant">
+              <div class="avatar">A</div>
+              <div class="bubble">
+                <div class="role">Agent</div>
+                <div class="body">
+                  <template v-if="pending.content">{{ pending.content }}<span class="cursor"></span></template>
+                  <div v-else class="skeleton-bars">
+                    <div class="bar"></div>
+                    <div class="bar"></div>
+                    <div class="bar"></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Composer -->
+          <div class="composer">
+            <div class="composer-inner">
+              <textarea
+                ref="inputEl"
+                v-model="input"
+                rows="1"
+                :placeholder="running ? 'Running… press Esc to cancel' : 'Ask something'"
+                :disabled="running"
+                @keydown="onKeyDown"
+                @input="autoresize"
+              ></textarea>
+              <div class="composer-actions">
+                <button
+                  v-if="running"
+                  class="btn btn-danger btn-icon"
+                  title="Cancel (Esc)"
+                  @click="cancel"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                    <rect x="6" y="6" width="12" height="12" rx="1.5"></rect>
+                  </svg>
+                </button>
+                <button
+                  class="btn btn-accent"
+                  :disabled="running || !input.trim() || !health.ok"
+                  @click="submit"
+                >
+                  <template v-if="running">
+                    <span class="dots"><span></span><span></span><span></span></span>
+                  </template>
+                  <template v-else>
+                    Send
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M5 12h14M13 5l7 7-7 7"></path>
+                    </svg>
+                  </template>
+                </button>
+              </div>
+            </div>
+            <div class="composer-hint">
+              <span><span class="kbd">Enter</span> send</span>
+              <span><span class="kbd">Shift</span>+<span class="kbd">Enter</span> newline</span>
+              <span><span class="kbd">Esc</span> cancel</span>
+              <span><span class="kbd">Ctrl</span>+<span class="kbd">L</span> clear</span>
+            </div>
+          </div>
+        </section>
+
+        <!-- Side column -->
+        <aside class="side">
+          <!-- Status -->
+          <div class="card status-card">
+            <div class="card-head">
+              <h2>Status</h2>
+              <button
+                class="btn btn-secondary"
+                style="height: 28px; padding: 0 10px; font-size: 12px;"
+                :disabled="chatHistory.length === 0 && toolTrace.length === 0 && appLog.length === 0"
+                @click="clearAll"
+              >
+                Clear
+              </button>
+            </div>
+            <div class="card-body">
+              <div class="status-row">
+                <span class="status-label">State</span>
+                <span class="status-state" :class="stateClass">
+                  <span v-if="running" class="spin"></span>
+                  {{ stateLabel }}
+                </span>
+              </div>
+              <div class="status-row">
+                <span class="status-label">Model</span>
+                <span class="status-value">{{ health.model || '—' }}</span>
+              </div>
+              <div class="status-row">
+                <span class="status-label">Elapsed</span>
+                <span class="status-value">{{ formatDuration(elapsed) }}</span>
+              </div>
+              <div class="status-row">
+                <span class="status-label">Messages</span>
+                <span class="status-value">{{ chatHistory.length }}</span>
+              </div>
+              <div class="status-row">
+                <span class="status-label">Tools</span>
+                <span class="status-value">{{ toolTrace.length }}</span>
+              </div>
+              <div class="status-row">
+                <span class="status-label">Session</span>
+                <span class="status-value">{{ formatSession(sessionElapsed) }}</span>
+              </div>
+              <div v-if="initError" class="error-bar">Init: {{ initError }}</div>
+              <div v-else-if="error" class="error-bar">{{ error }}</div>
+            </div>
+          </div>
+
+          <!-- Tool Trace -->
+          <div class="card">
+            <div class="card-head">
+              <h2>Tool Trace</h2>
+              <span class="head-meta">{{ toolTrace.length }} calls</span>
+            </div>
+            <div class="feed">
+              <div v-if="toolTrace.length === 0" class="feed-empty">
+                No tool calls yet.
+              </div>
+              <div
+                v-for="t in reversedTools"
+                :key="t.id"
+                class="tool-entry"
+              >
+                <div class="tool-head">
+                  <span class="tool-name">{{ t.name }}</span>
+                  <span class="tool-status" :class="t.status">
+                    <template v-if="t.status === 'running'">
+                      <span class="spin" style="width:8px;height:8px;border-width:1.5px;vertical-align:-1px;"></span> RUN
+                    </template>
+                    <template v-else-if="t.status === 'done'">OK</template>
+                    <template v-else>ERR</template>
+                  </span>
+                </div>
+                <div v-if="t.input" class="tool-io">
+                  <span class="k">in</span>
+                  <span class="v">{{ truncate(t.input, 200) }}</span>
+                </div>
+                <div v-if="t.output" class="tool-io">
+                  <span class="k">out</span>
+                  <span class="v">{{ truncate(t.output, 200) }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- App Log -->
+          <div class="card log-card">
+            <div class="card-head">
+              <h2>App Log</h2>
+              <span class="head-meta">{{ appLog.length }} lines</span>
+            </div>
+            <div class="card-body">
+              <div class="log-feed" ref="logEl">
+                <div
+                  v-for="l in appLog"
+                  :key="l.id"
+                  class="log-line"
+                >
+                  <span class="log-ts">{{ formatTs(l.ts) }}</span>
+                  <span class="log-tag" :class="l.level">{{ (l.level || 'log').toUpperCase().padEnd(5) }}</span>
+                  <span>{{ l.text }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </aside>
+      </main>
+    </div>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
